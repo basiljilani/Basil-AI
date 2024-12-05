@@ -1,4 +1,3 @@
-import React from 'react';
 import { Users, MessageSquare, Award, Rocket } from 'lucide-react';
 
 export default function Community() {
