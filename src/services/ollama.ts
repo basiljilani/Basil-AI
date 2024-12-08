@@ -6,7 +6,7 @@ export class OllamaService {
   private baseUrl: string;
   private model: string;
   
-  constructor(model: string = 'llama3') {
+  constructor(model: string = 'llama2') {
     this.baseUrl = OLLAMA_API_ENDPOINT;
     this.model = model;
   }
@@ -41,7 +41,7 @@ export class OllamaService {
         conversationLength: conversation.messages.length
       });
 
-      const systemPrompt = `You are a highly capable career guidance AI assistant powered by Llama 3. You excel at providing detailed, nuanced advice while maintaining a professional and engaging tone. When formatting responses:
+      const systemPrompt = `You are a highly capable career guidance AI assistant powered by Llama 2. You excel at providing detailed, nuanced advice while maintaining a professional and engaging tone. When formatting responses:
 
 1. Use clear markdown structure with proper headings (# for main titles, ## for sections)
 2. Ensure good visual spacing between sections (double newline)
