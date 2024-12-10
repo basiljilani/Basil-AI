@@ -1,8 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { Message, Conversation, ChatContextType } from '../types/chat';
-import { OllamaService } from '../services/ollama';
+import { api } from '../lib/api';
 
-const ollamaService = new OllamaService('llama3');
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
@@ -11,49 +10,50 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [isTyping, setIsTyping] = useState(false);
   const [lastLogNumber, setLastLogNumber] = useState(101);
 
-  // Create default conversation on mount
+  // Load conversations on mount
   useEffect(() => {
-    if (conversations.length === 0) {
-      const defaultConversation: Conversation = {
-        id: 'default',
-        title: 'Log Book 101',
-        messages: [],
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-      setConversations([defaultConversation]);
-      setCurrentConversation(defaultConversation);
-    }
+    const loadConversations = async () => {
+      try {
+        const loadedConversations = await api.getConversations();
+        setConversations(loadedConversations);
+        if (loadedConversations.length > 0) {
+          setCurrentConversation(loadedConversations[0]);
+        } else {
+          createNewConversation();
+        }
+      } catch (error) {
+        console.error('Error loading conversations:', error);
+        createNewConversation();
+      }
+    };
+    loadConversations();
   }, []);
 
-  const createNewConversation = useCallback(() => {
+  const createNewConversation = useCallback(async () => {
     const newLogNumber = lastLogNumber + 1;
     setLastLogNumber(newLogNumber);
     
-    const newConversation: Conversation = {
-      id: Date.now().toString(),
-      title: `Log Book ${newLogNumber}`,
-      messages: [],
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-    setConversations(prev => [newConversation, ...prev]);
-    setCurrentConversation(newConversation);
-    return newConversation;
+    try {
+      const newConversation = await api.createConversation(`Log Book ${newLogNumber}`);
+      setConversations(prev => [newConversation, ...prev]);
+      setCurrentConversation(newConversation);
+      return newConversation;
+    } catch (error) {
+      console.error('Error creating conversation:', error);
+      return null;
+    }
   }, [lastLogNumber]);
 
   const deleteConversation = useCallback((id: string) => {
-    if (id === 'default') return; // Prevent deleting default conversation
     setConversations(prev => prev.filter(conv => conv.id !== id));
     if (currentConversation?.id === id) {
-      const defaultConv = conversations.find(c => c.id === 'default');
-      setCurrentConversation(defaultConv || null);
+      const firstConv = conversations[0];
+      setCurrentConversation(firstConv || null);
     }
   }, [currentConversation, conversations]);
 
   const sendMessage = useCallback(async (content: string) => {
-    const conversation = currentConversation || conversations.find(c => c.id === 'default');
-    if (!conversation) return;
+    if (!currentConversation) return;
 
     try {
       const userMessage: Message = {
@@ -63,9 +63,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         timestamp: new Date()
       };
 
-      // Update UI with user message
+      // Update UI optimistically
       setCurrentConversation(prev => {
-        if (!prev) return conversation;
+        if (!prev) return null;
         return {
           ...prev,
           messages: [...prev.messages, userMessage],
@@ -73,93 +73,52 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         };
       });
 
-      setConversations(prev => 
-        prev.map(conv => 
-          conv.id === conversation.id 
-            ? { ...conv, messages: [...conv.messages, userMessage], updatedAt: new Date() }
-            : conv
-        )
-      );
-
-      // Show typing animation
-      setIsTyping(true);
-
-      // Get response from Ollama
-      const aiContent = await ollamaService.sendMessage(conversation, content);
-
-      const aiResponse: Message = {
-        id: (Date.now() + 1).toString(),
-        content: aiContent,
-        sender: 'ai',
-        timestamp: new Date()
-      };
-
-      setIsTyping(false);
-
-      // Update UI with AI response
+      // Send message to backend
+      const response = await api.sendMessage(currentConversation.id, content);
+      
+      // Load updated messages
+      const updatedMessages = await api.getMessages(currentConversation.id);
+      
+      // Update conversation with latest messages
       setCurrentConversation(prev => {
-        if (!prev) return conversation;
+        if (!prev) return null;
         return {
           ...prev,
-          messages: [...prev.messages, aiResponse],
+          messages: updatedMessages,
           updatedAt: new Date()
         };
       });
 
       setConversations(prev => 
         prev.map(conv => 
-          conv.id === conversation.id 
-            ? { ...conv, messages: [...conv.messages, aiResponse], updatedAt: new Date() }
+          conv.id === currentConversation.id 
+            ? { ...conv, messages: updatedMessages, updatedAt: new Date() }
             : conv
         )
       );
+
     } catch (error) {
-      console.error('Error in chat:', error);
-      setIsTyping(false);
-      
-      let errorMessage: string;
-      if (error instanceof Error) {
-        errorMessage = error.message.includes('AI service')
-          ? error.message
-          : 'I encountered an unexpected error. Please try again later.';
-      } else {
-        errorMessage = 'I encountered an unexpected error. Please try again later.';
-      }
-      
-      const errorResponse: Message = {
-        id: (Date.now() + 1).toString(),
-        content: `# Error\n\n${errorMessage}\n\n**Troubleshooting Steps:**\n\n1. Ensure Ollama is running locally\n2. Check your internet connection\n3. Try refreshing the page\n4. If the issue persists, please try again in a few minutes`,
-        sender: 'ai',
-        timestamp: new Date()
-      };
-
+      console.error('Error sending message:', error);
+      // Revert optimistic update on error
+      const originalMessages = await api.getMessages(currentConversation.id);
       setCurrentConversation(prev => {
-        if (!prev) return conversation;
+        if (!prev) return null;
         return {
           ...prev,
-          messages: [...prev.messages, errorResponse],
-          updatedAt: new Date()
+          messages: originalMessages
         };
       });
-
-      setConversations(prev => 
-        prev.map(conv => 
-          conv.id === conversation.id 
-            ? { ...conv, messages: [...conv.messages, errorResponse], updatedAt: new Date() }
-            : conv
-        )
-      );
     }
-  }, [currentConversation, conversations]);
+  }, [currentConversation]);
 
   const value = {
     conversations,
     currentConversation,
     isTyping,
+    setCurrentConversation,
     createNewConversation,
     deleteConversation,
-    sendMessage,
-    setCurrentConversation,
+    sendMessage
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
